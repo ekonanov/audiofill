@@ -1,0 +1,1185 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">backend/audiofill.go (66.8%)</option>
+				
+				<option value="file1">backend/sessions.go (96.9%)</option>
+				
+				<option value="file2">backend/users.go (71.3%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package main
+
+import (
+        "database/sql"
+        "encoding/json"
+        "fmt"
+        "io"
+        "io/ioutil"
+        "log"
+        "net/http"
+        "os"
+        "path"
+        "strconv"
+        "time"
+
+        "github.com/lib/pq"
+        _ "github.com/lib/pq"
+)
+
+const mediaDir = "media"
+
+type tShare struct {
+        AudioID  int    `json:"audio,omitempty"`
+        UserID   int    `json:"id"`
+        UserName string `json:"name"`
+}
+
+type tAudio struct {
+        AudioID   int    `json:"id"`
+        Descr     string `json:"name"`
+        IsOwn     bool   `json:"is_owner"`
+        OwnerID   int    `json:"owner_id"`
+        OwnerName string `json:"owner_name"`
+
+        Shared []*tShare `json:"shared_to"`
+}
+
+type tAudioList struct {
+        Count int       `json:"total_count"`
+        List  []*tAudio `json:"records"`
+}
+
+//Audiofill класс для таблиц audio/share
+//        добавление/удаление аудиозаписей, просмотр списка записей, "расшаривание"
+//        получение (скачивание) файла аудиозаписи
+type Audiofill struct {
+        DB     *sql.DB
+        userID int
+}
+
+//NewAudiofill создание нового экземпляра класса Audiofill
+func NewAudiofill(db *sql.DB) *Audiofill <span class="cov8" title="1">{
+        return &amp;Audiofill{
+                DB: db,
+        }
+}</span>
+
+//List cписок доступных пользователю аудиозаписей. Метод GET, доступен только для авторизованных
+//Параметры: page_no номер страницы, on_page строк на странице, необязательные
+//        по умолчанию 1 и 10 соответственно.
+//        order_by поле сортировки, допустимые значения user|track, default — user
+//Результат:
+//Ошибка:
+func (afl *Audiofill) List(resp http.ResponseWriter, req *http.Request) <span class="cov8" title="1">{
+        var (
+                err      error
+                pg, ln   int
+                ord      string
+                sqlQuery string
+
+                qr      *sql.Row
+                qs      *sql.Rows
+                aLst    tAudioList
+                curAd   *tAudio
+                sqlID   sql.NullInt64
+                sqlName sql.NullString
+                jsRes   []byte
+        )
+
+        orderBy := map[string]string{
+                "user":  "3 desc, 4, 2",
+                "track": "2",
+        }
+        if req.Method != http.MethodGet </span><span class="cov8" title="1">{
+                http.Error(resp, "bad method", http.StatusMethodNotAllowed)
+                return
+        }</span>
+
+        <span class="cov8" title="1">afl.userID, err = checkSession(afl.DB, req)
+        if err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "access denied", http.StatusUnauthorized)
+                return
+        }</span>
+
+        <span class="cov8" title="1">err = req.ParseForm()
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "wrong form data", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">pg, ln = getPageno(req)
+
+        if strVal, ok := req.Form["order_by"]; ok </span><span class="cov8" title="1">{
+                if ord, ok = orderBy[strVal[0]]; !ok </span><span class="cov8" title="1">{
+                        http.Error(resp, "bad parameter order_by", http.StatusBadRequest)
+                        return
+                }</span>
+        } else<span class="cov8" title="1"> {
+                ord = orderBy["user"]
+        }</span>
+
+        <span class="cov8" title="1">aLst = tAudioList{}
+        //        т.к.: cannot insert multiple commands into a prepared statement
+        //        получаем данные в два запроса:
+        qr = afl.DB.QueryRow(`--общее количество доступных пользователю записей
+                SELECT count(distinct id_audio)
+                FROM audio
+                WHERE id_owner = $1        -- собственные
+                        OR id_audio in ( -- расшаренные другими
+                                SELECT id_audio FROM share WHERE id_user = $1
+                        )
+                `, afl.userID)
+        err = qr.Scan(&amp;aLst.Count)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                //        если это ошибка постгреса, в логе можем сохранить более детальную информацию
+                if pgErr, ok := err.(*pq.Error); ok </span><span class="cov0" title="0">{
+                        log.Println("Audio.List scan count failed:", pgErr.Message, pgErr.Detail)
+                }</span> else<span class="cov0" title="0"> {
+                        log.Println("Audio.List scan count failed:", err.Error())
+                }</span>
+                <span class="cov0" title="0">return</span>
+        }
+
+        <span class="cov8" title="1">sqlQuery = fmt.Sprintf(`-- список записей с постраничной разбивкой
+                WITH available AS (
+                        SELECT  a.id_audio, 
+                                concat(a.description,' (',a.duration,')') as name, 
+                                a.id_owner = $1 as is_owner,
+                                a.id_owner,
+                                coalesce(nullif(own.name,''), own.login) as owner_name
+                                
+                        FROM audio a
+                        INNER JOIN users own on (a.id_owner = own.id_user)
+
+                        WHERE a.id_owner = $1        -- собственные
+                                OR a.id_audio in ( -- расшаренные другими
+                                                SELECT id_audio FROM share WHERE id_user = $1
+                                )
+                        ORDER BY %s
+                        OFFSET $2 LIMIT $3
+                        )
+                SELECT av.*, usr.id_user,
+                        coalesce(nullif(usr.name, ''), usr.login) as user_name
+                FROM available av
+                LEFT JOIN share sh ON (sh.id_audio = av.id_audio)
+                LEFT JOIN users usr ON (sh.id_user = usr.id_user)
+                ORDER BY %s, 6
+                `, ord, ord)
+
+        qs, err = afl.DB.Query(sqlQuery, afl.userID, pg*ln, ln)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                if pgErr, ok := err.(*pq.Error); ok </span><span class="cov0" title="0">{
+                        log.Println("Audio.List query list failed:", pgErr.Message, pgErr.Detail)
+                }</span> else<span class="cov0" title="0"> {
+                        log.Println("Audio.List query list failed:", err.Error())
+                }</span>
+                <span class="cov0" title="0">return</span>
+        }
+        <span class="cov8" title="1">defer qs.Close()
+
+        //        sql.Rows в случае пустого списка не генерит ошибку ErrNoRows, проверяем сами
+        if !qs.Next() </span><span class="cov8" title="1">{
+                http.Error(resp, "", http.StatusNotFound)
+                return
+        }</span>
+
+        <span class="cov8" title="1">curAd = &amp;tAudio{}
+        err = qs.Scan(&amp;curAd.AudioID, &amp;curAd.Descr, &amp;curAd.IsOwn, &amp;curAd.OwnerID, &amp;curAd.OwnerName, &amp;sqlID, &amp;sqlName)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "", http.StatusInternalServerError)
+                log.Println("Audio.List query scan error:", err.Error())
+                return
+        }</span>
+        <span class="cov8" title="1">if sqlID.Valid </span><span class="cov8" title="1">{ //        null-значения не добавляем
+                afl.appendShare(curAd, sqlID, sqlName)
+        }</span>
+
+        <span class="cov8" title="1">for qs.Next() </span><span class="cov8" title="1">{
+                ad := &amp;tAudio{}
+                err = qs.Scan(&amp;ad.AudioID, &amp;ad.Descr, &amp;ad.IsOwn, &amp;ad.OwnerID, &amp;ad.OwnerName, &amp;sqlID, &amp;sqlName)
+                if err != nil </span><span class="cov0" title="0">{
+                        http.Error(resp, "", http.StatusInternalServerError)
+                        log.Println("Audio.List query scan error:", err.Error())
+                        return
+                }</span>
+
+                <span class="cov8" title="1">if ad.AudioID == curAd.AudioID </span><span class="cov8" title="1">{ //        добавляем список "расшаренных" в текущую запись
+                        afl.appendShare(curAd, sqlID, sqlName)
+
+                }</span> else<span class="cov8" title="1"> { //        новая запись ­— сохраним "старую" и создадим новую
+                        aLst.List = append(aLst.List, curAd)
+
+                        afl.appendShare(ad, sqlID, sqlName)
+                        curAd = &amp;tAudio{}
+                        afl.copyAudio(curAd, ad)
+                }</span>
+        }
+        <span class="cov8" title="1">aLst.List = append(aLst.List, curAd)
+
+        jsRes, err = json.Marshal(aLst)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "Audio.List result marshaling error", http.StatusInternalServerError)
+                log.Println("Audio.List result marshaling error", err.Error())
+                return
+        }</span>
+        <span class="cov8" title="1">resp.WriteHeader(http.StatusOK)
+        resp.Write(jsRes)</span>
+}
+
+//Share “Расшарить” аудиозапись. Метод POST, доступен только авторизованным пользователям
+//Параметры: track — id аудиозаписи, к которой предоставляется доступ
+//        user — пользователь, которому предоставляется доступ
+//Результат: статус ОК
+//Ошибка:
+func (afl *Audiofill) Share(resp http.ResponseWriter, req *http.Request) <span class="cov8" title="1">{
+        var (
+                err error
+                ok  bool
+
+                frmVal  []string
+                tr, usr int
+        )
+        if req.Method != http.MethodPost </span><span class="cov8" title="1">{
+                http.Error(resp, "bad method", http.StatusMethodNotAllowed)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if afl.userID, err = checkSession(afl.DB, req); err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "access denied", http.StatusUnauthorized)
+                return
+        }</span>
+
+        <span class="cov8" title="1">err = req.ParseForm()
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "wrong form data", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if frmVal, ok = req.Form["track"]; !ok </span><span class="cov8" title="1">{
+                http.Error(resp, "track required", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">if tr, err = strconv.Atoi(frmVal[0]); err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "invalid track value", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if frmVal, ok = req.Form["user"]; !ok </span><span class="cov8" title="1">{
+                http.Error(resp, "user required", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">if usr, err = strconv.Atoi(frmVal[0]); err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "invalid user value", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if !afl.checkAudioOwner(tr, resp) </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        <span class="cov8" title="1">_, err = afl.DB.Exec(`INSERT INTO share (id_audio, id_user) VALUES ($1, $2)`, tr, usr)
+        if err != nil </span><span class="cov8" title="1">{
+                if pgErr, ok := err.(*pq.Error); ok </span><span class="cov8" title="1">{
+                        switch pgErr.Code </span>{
+                        case "23503":<span class="cov8" title="1"> // foreign key constraint violation
+                                http.Error(resp, "user not exists", http.StatusBadRequest)</span>
+                        default:<span class="cov0" title="0">
+                                http.Error(resp, pgErr.Detail, http.StatusBadRequest)</span>
+                        }
+                        <span class="cov8" title="1">log.Println("Audio.Share query failed:", pgErr.Message, pgErr.Detail)</span>
+                } else<span class="cov0" title="0"> {
+                        http.Error(resp, "internal error", http.StatusInternalServerError)
+                        log.Println("Audio.Share query failed:", err.Error())
+                }</span>
+                <span class="cov8" title="1">return</span>
+        }
+
+        <span class="cov8" title="1">resp.WriteHeader(http.StatusOK)
+        resp.Write([]byte(""))</span>
+}
+
+//Lock отменить “шаринг” аудиозаписи. Метод POST, доступен только авторизованным пользователям
+//Параметры: track — id аудиозаписи, к доступ которой блокируется
+//        user — пользователь, которому блокируется доступ
+//Результат:
+//Ошибка:
+func (afl *Audiofill) Lock(resp http.ResponseWriter, req *http.Request) <span class="cov8" title="1">{
+        var (
+                err     error
+                frmVal  []string
+                ok      bool
+                tr, usr int
+        )
+        if req.Method != http.MethodPost </span><span class="cov8" title="1">{
+                http.Error(resp, "bad method", http.StatusMethodNotAllowed)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if afl.userID, err = checkSession(afl.DB, req); err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "access denied", http.StatusUnauthorized)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if err = req.ParseForm(); err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "wrong form data", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">if frmVal, ok = req.Form["track"]; !ok </span><span class="cov8" title="1">{
+                http.Error(resp, "track required", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">if tr, err = strconv.Atoi(frmVal[0]); err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "invalid track value", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if frmVal, ok = req.Form["user"]; !ok </span><span class="cov8" title="1">{
+                http.Error(resp, "user required", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">if usr, err = strconv.Atoi(frmVal[0]); err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "invalid user value", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if !afl.checkAudioOwner(tr, resp) </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        <span class="cov8" title="1">qr, err := afl.DB.Exec(`DELETE FROM share WHERE id_audio = $1 AND id_user = $2`, tr, usr)
+        if err != nil </span><span class="cov0" title="0">{
+                if pgErr, ok := err.(*pq.Error); ok </span><span class="cov0" title="0">{
+                        http.Error(resp, pgErr.Detail, http.StatusInternalServerError)
+                        log.Println("Audio.Lock query failed:", pgErr.Message, pgErr.Detail)
+                }</span> else<span class="cov0" title="0"> {
+                        http.Error(resp, "internal error", http.StatusInternalServerError)
+                        log.Println("Audio.Lock query failed:", err.Error())
+                }</span>
+                <span class="cov0" title="0">return</span>
+        }
+        <span class="cov8" title="1">if res, _ := qr.RowsAffected(); res == 0 </span><span class="cov8" title="1">{
+                http.Error(resp, "no rows are deleted", http.StatusNotFound)
+                return
+        }</span>
+        <span class="cov8" title="1">resp.WriteHeader(http.StatusOK)
+        resp.Write([]byte(""))</span>
+}
+
+//Get получить файл с аудиозаписью. Метод GET, доступен только авторизованным пользователям
+//Параметры: track — id аудиозаписи
+//Результат:
+//Ошибка:
+func (afl *Audiofill) Get(resp http.ResponseWriter, req *http.Request) <span class="cov8" title="1">{
+        var (
+                err    error
+                frmVal []string
+                ok     bool
+                tr     int
+                qr     *sql.Row
+                fd     *os.File
+
+                fileDescr, fileName string
+        )
+        if req.Method != http.MethodGet </span><span class="cov8" title="1">{
+                http.Error(resp, "bad method", http.StatusMethodNotAllowed)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if afl.userID, err = checkSession(afl.DB, req); err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "access denied", http.StatusUnauthorized)
+                return
+        }</span>
+        <span class="cov8" title="1">if err = req.ParseForm(); err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "wrong form data", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">if frmVal, ok = req.Form["track"]; !ok </span><span class="cov8" title="1">{
+                http.Error(resp, "track required", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">if tr, err = strconv.Atoi(frmVal[0]); err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "track invalid value", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">qr = afl.DB.QueryRow(`SELECT description, filename FROM audio a
+                WHERE id_audio = $2 AND (id_owner = $1
+                        OR exists (SELECT id_audio FROM share s
+                                WHERE s.id_audio = a.id_audio AND s.id_user = $1)
+                        )
+                `, afl.userID, tr)
+        if err = qr.Scan(&amp;fileDescr, &amp;fileName); err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                if pgErr, ok := err.(*pq.Error); ok </span><span class="cov0" title="0">{
+                        log.Println("Audio.Get query failed:", pgErr.Message, pgErr.Detail)
+                }</span> else<span class="cov0" title="0"> {
+                        log.Println("Audio.Get query failed:", err.Error())
+                }</span>
+                <span class="cov0" title="0">return</span>
+        }
+
+        <span class="cov8" title="1">if fd, err = os.Open(path.Join(mediaDir, fileName)); err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "file not found", http.StatusNotFound)
+                return
+        }</span>
+
+        <span class="cov8" title="1">defer fd.Close()
+        http.ServeContent(resp, req, fileDescr, time.Now(), fd)</span>
+}
+
+//Add добавить новую аудиозапись. Метод PUT. Доступен только авторизованным пользователям
+//Параметры: file обязательный; name, duration — необязательные, по умолчанию
+//        name = file.Filename, duration = '00:00'
+//Результат:
+//Ошибка:
+func (afl *Audiofill) Add(resp http.ResponseWriter, req *http.Request) <span class="cov8" title="1">{
+        var (
+                frmVal []string
+                isSet  bool
+                err    error
+
+                sqlQuery string
+                sqlParam []interface{}
+                tmpFile  *os.File
+        )
+
+        if req.Method != http.MethodPut </span><span class="cov8" title="1">{
+                http.Error(resp, "bad method", http.StatusMethodNotAllowed)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if afl.userID, err = checkSession(afl.DB, req); err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "access denied", http.StatusUnauthorized)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if err = req.ParseMultipartForm(2 &lt;&lt; 10); err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "wrong form data", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">sqlQuery = `INSERT INTO audio (id_audio, id_owner, filename, description, duration)
+                VALUES (default, $1, $2, $3, `
+        sqlParam = append(sqlParam, afl.userID)
+
+        fd, fh, err := req.FormFile("file")
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "file upload error", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">defer fd.Close()
+        if tmpFile, err = ioutil.TempFile(mediaDir, ""); err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "iternal error", http.StatusInternalServerError)
+                log.Println("Audio.Add temp file creating error:", err.Error())
+                return
+        }</span>
+
+        <span class="cov8" title="1">io.Copy(tmpFile, fd)
+        if err = tmpFile.Close(); err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "iternal error", http.StatusInternalServerError)
+                log.Println("Audio.Add temp file creating error:", err.Error())
+                return
+        }</span>
+        <span class="cov8" title="1">sqlParam = append(sqlParam, path.Base(tmpFile.Name()))
+
+        if frmVal, isSet = req.MultipartForm.Value["name"]; isSet </span><span class="cov8" title="1">{
+                sqlParam = append(sqlParam, frmVal[0])
+        }</span> else<span class="cov8" title="1"> {
+                sqlParam = append(sqlParam, fh.Filename)
+        }</span>
+
+        <span class="cov8" title="1">if frmVal, isSet = req.MultipartForm.Value["duration"]; isSet </span><span class="cov8" title="1">{
+                sqlParam = append(sqlParam, frmVal[0])
+                sqlQuery += "$4"
+        }</span> else<span class="cov8" title="1"> {
+                sqlQuery += "default"
+        }</span>
+        <span class="cov8" title="1">sqlQuery += ")"
+
+        _, err = afl.DB.Exec(sqlQuery, sqlParam...)
+        if err != nil </span><span class="cov0" title="0">{
+                //        rollback — delete temp file from mediaDir
+                os.Remove(tmpFile.Name())
+                if pgErr, ok := err.(*pq.Error); ok </span><span class="cov0" title="0">{
+                        http.Error(resp, pgErr.Detail, http.StatusInternalServerError)
+                        log.Println("Audio.Add query failed:", pgErr.Message, pgErr.Detail)
+                }</span> else<span class="cov0" title="0"> {
+                        http.Error(resp, "internal error", http.StatusInternalServerError)
+                        log.Println("Audio.Add query failed:", err.Error())
+                }</span>
+                <span class="cov0" title="0">return</span>
+        }
+
+        <span class="cov8" title="1">resp.WriteHeader(http.StatusOK)</span>
+}
+
+//copyAudio глубокое копирование структуры tAudio из src в dst
+func (afl *Audiofill) copyAudio(dst, src *tAudio) <span class="cov8" title="1">{
+        dst.AudioID, dst.Descr, dst.IsOwn, dst.OwnerID, dst.OwnerName = src.AudioID, src.Descr, src.IsOwn, src.OwnerID, src.OwnerName
+        for _, v := range src.Shared </span><span class="cov8" title="1">{
+                sh := &amp;tShare{}
+                sh.UserID, sh.UserName = v.UserID, v.UserName
+                dst.Shared = append(dst.Shared, sh)
+        }</span>
+}
+
+//appendShare добваление в список Shared структуры tAudio ненулевых (не NULL) значений
+func (afl *Audiofill) appendShare(dst *tAudio, id sql.NullInt64, name sql.NullString) <span class="cov8" title="1">{
+        if id.Valid </span><span class="cov8" title="1">{
+                dst.Shared = append(dst.Shared, &amp;tShare{UserID: int(id.Int64), UserName: name.String})
+        }</span>
+}
+
+//checkAudioOwner проверка владельца трека id. Отдельный запрос нужне исключительно для
+//        возврата статуса Forbidden.
+//        Вообще, это условие можно проверить непосредственно при обновлении/вставке/удалении
+//
+func (afl *Audiofill) checkAudioOwner(id int, resp http.ResponseWriter) (ok bool) <span class="cov8" title="1">{
+        qr := afl.DB.QueryRow(`SELECT id_owner = $1 FROM audio WHERE id_audio = $2`, afl.userID, id)
+        if err := qr.Scan(&amp;ok); err != nil </span><span class="cov0" title="0">{
+                if err == sql.ErrNoRows </span><span class="cov0" title="0">{
+                        http.Error(resp, "track not found", http.StatusNotFound)
+                }</span> else<span class="cov0" title="0"> {
+                        http.Error(resp, "Audio.Share qurey failed", http.StatusInternalServerError)
+                }</span>
+                <span class="cov0" title="0">return false</span>
+        }
+        <span class="cov8" title="1">if !ok </span><span class="cov8" title="1">{
+                http.Error(resp, "access denied", http.StatusForbidden)
+        }</span>
+        <span class="cov8" title="1">return ok</span>
+}
+
+func main() <span class="cov0" title="0">{
+        var (
+                db  *sql.DB
+                err error
+        )
+
+        db, err = sql.Open("postgres", connStr)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Fatalln("Unable to connect to database. Check the connection settings in 'conf.go'", err)
+                return
+        }</span>
+        <span class="cov0" title="0">err = db.Ping()
+        if err != nil </span><span class="cov0" title="0">{
+                log.Fatalln("Unable to connect to database. Check the connection settings in 'conf.go'", err)
+                return
+        }</span>
+
+        <span class="cov0" title="0">ad := NewAudiofill(db)
+        usr := NewUsers(db)
+        mux := http.NewServeMux()
+        mux.HandleFunc("/registration", usr.Registration)
+        mux.HandleFunc("/login", usr.Login)
+        mux.HandleFunc("/user/list", usr.List)
+        mux.HandleFunc("/user/share", usr.Share)
+        mux.HandleFunc("/audio/list", ad.List)
+        mux.HandleFunc("/audio/share", ad.Share)
+        mux.HandleFunc("/audio/lock", ad.Lock)
+        mux.HandleFunc("/audio/get", ad.Get)
+        mux.HandleFunc("/audio/add", ad.Add)
+
+        fmt.Println("Server listen on :8008")
+        http.ListenAndServe(":8008", mux)</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package main
+
+import (
+        "crypto/rand"
+        "database/sql"
+        "fmt"
+        "net/http"
+        "strconv"
+
+        _ "github.com/lib/pq"
+)
+
+//newSession create new session for user uid
+//        Продолжительность сессии системой никак не контролируется. Пользователь
+//        может закрыть браузер в любой момент и оборвать сессию без уведомления
+//        сервера. При следующем входе создастся новая сессия с другим ИД.
+//        Чтобы в БД обеспечить уникальность сессии (для одного id_user — одна
+//        id_session), в случае конфликта делаем обновление старой записи
+func newSession(db *sql.DB, uid int) (sessID string, err error) <span class="cov8" title="1">{
+        b := make([]byte, 16)
+        _, err = rand.Read(b)
+        if err != nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+        <span class="cov8" title="1">sessID = fmt.Sprintf("%x", b)
+        _, err = db.Exec(`INSERT INTO sessions (id_user, id_session) VALUES ($1, $2)
+                ON CONFLICT (id_user) DO UPDATE set id_session = $2 
+                WHERE sessions.id_user = $1`, uid, sessID)
+        return</span>
+}
+
+//checkSession        проверяет наличие активной сессии пользователя по куке session_id
+//  при наличии сесии возвращает соответсвующий userID
+func checkSession(db *sql.DB, r *http.Request) (userID int, err error) <span class="cov8" title="1">{
+        var sessID *http.Cookie
+
+        sessID, err = r.Cookie("session_id")
+        if err != nil </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        <span class="cov8" title="1">err = db.QueryRow("Select id_user From sessions Where id_session = $1", sessID.Value).Scan(&amp;userID)
+        return</span>
+}
+
+//getPageno получает из параметров запроса номер страницы и кол-во строк на странице
+func getPageno(r *http.Request) (pg, ln int) <span class="cov8" title="1">{
+        var (
+                err    error
+                strVal []string
+                isSet  bool
+        )
+
+        strVal, isSet = r.Form["page_no"]
+        if isSet </span><span class="cov8" title="1">{
+                pg, err = strconv.Atoi(strVal[0])
+                if err != nil </span><span class="cov8" title="1">{
+                        pg = 0
+                }</span> else<span class="cov8" title="1"> if pg &lt;= 0 </span><span class="cov8" title="1">{ // отрицательные значения игнорируем/исправляем
+                        pg = 0
+                }</span> else<span class="cov8" title="1"> { // "человеческая" нумерация начинается с 1, машинная — с 0. Приводим номер к машинному
+                        pg--
+                }</span>
+        } else<span class="cov8" title="1"> {
+                pg = 0
+        }</span>
+
+        <span class="cov8" title="1">strVal, isSet = r.Form["on_page"]
+        if isSet </span><span class="cov8" title="1">{
+                ln, err = strconv.Atoi(strVal[0])
+                if err != nil </span><span class="cov8" title="1">{
+                        ln = 10
+                }</span> else<span class="cov8" title="1"> if ln &lt;= 0 </span><span class="cov8" title="1">{ // отрицательные значения игнорируем/исправляем
+                        ln = 10
+                }</span>
+        } else<span class="cov8" title="1"> {
+                ln = 10
+        }</span>
+        <span class="cov8" title="1">return</span>
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package main
+
+import (
+        "database/sql"
+        "encoding/json"
+        "fmt"
+        "log"
+        "net/http"
+        "strings"
+        "time"
+
+        "github.com/lib/pq"
+        _ "github.com/lib/pq"
+)
+
+type tUser struct {
+        UserID int    `json:"id"`
+        Name   string `json:"name"`
+        Login  string `json:"login,omitempty"`
+        Shared int    `json:"shared_records,omitempty"`
+}
+
+type tUsrList struct {
+        Count int      `json:"total_count,omitempty"`
+        List  []*tUser `json:"users"`
+}
+
+//Users класс для обслуживания запросов к таблице "users":
+//        добавление нового (регистрация), проверка логина/пароля, список
+type Users struct {
+        DB     *sql.DB `json:"-"`
+        userID int
+}
+
+//NewUsers создание нового экземпляра класса Users
+func NewUsers(db *sql.DB) *Users <span class="cov8" title="1">{
+        return &amp;Users{
+                DB: db,
+        }
+}</span>
+
+//Registration регистрация нового пользователя в системе. Метод PUT
+//Параметры: login, passwd обязательные, name. Login должен быть уникальным
+//Результат: статус "Created", назначенный id новому пользователю {"id":&lt;ddd&gt;, }
+//Ошибка: статус "MethodNotAllowed" если метод не PUT
+//        статус "BadRequest" если отсутствуют обязательные параметры или логин занят,
+//        статус "InternalServerError" в остальных случаях
+func (usr *Users) Registration(resp http.ResponseWriter, req *http.Request) <span class="cov8" title="1">{
+        var (
+                sqlQuery string        //        текст запроса
+                sqlParam []interface{} //        параметры запроса
+                qr       *sql.Row      //        результаты запроса
+                err      error
+                isSet    bool
+                frmVal   []string
+                userID   int
+        )
+
+        resp.Header().Set("Content-Type", "text/plain")
+        if req.Method != http.MethodPut </span><span class="cov8" title="1">{
+                http.Error(resp, "bad method", http.StatusMethodNotAllowed)
+                return
+        }</span>
+
+        <span class="cov8" title="1">err = req.ParseForm()
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "wrong form data", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">sqlQuery = `INSERT INTO users (login, password, name) 
+                VALUES ($1, md5($2),`
+
+        frmVal, isSet = req.Form["login"]
+        if !isSet </span><span class="cov8" title="1">{
+                http.Error(resp, "login required", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">sqlParam = append(sqlParam, frmVal[0])
+
+        frmVal, isSet = req.Form["passwd"]
+        if !isSet </span><span class="cov8" title="1">{
+                http.Error(resp, "password required", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">sqlParam = append(sqlParam, frmVal[0])
+
+        frmVal, isSet = req.Form["name"]
+        if isSet </span><span class="cov8" title="1">{
+                sqlParam = append(sqlParam, frmVal[0])
+                sqlQuery += fmt.Sprintf("$%d,", len(sqlParam))
+        }</span> else<span class="cov8" title="1"> {
+                sqlQuery += "default,"
+        }</span>
+
+        <span class="cov8" title="1">sqlQuery = strings.TrimRight(sqlQuery, ",") + ") RETURNING id_user"
+
+        qr = usr.DB.QueryRow(sqlQuery, sqlParam...)
+        err = qr.Scan(&amp;userID)
+        if err != nil </span><span class="cov8" title="1">{
+                if pgErr, ok := err.(*pq.Error); ok </span><span class="cov8" title="1">{
+                        switch pgErr.Code </span>{
+                        case "23505":<span class="cov8" title="1"> // unique constraint violation
+                                http.Error(resp, "login already used", http.StatusBadRequest)
+                                log.Println("Users.Registration query failed:", pgErr.Message, pgErr.Detail)</span>
+                        default:<span class="cov0" title="0">
+                                http.Error(resp, pgErr.Message, http.StatusBadRequest)
+                                log.Println("Users.Registration query failed:", pgErr.Message, pgErr.Detail)</span>
+                        }
+
+                } else<span class="cov0" title="0"> {
+                        http.Error(resp, "internal error", http.StatusInternalServerError)
+                        log.Println("Users.Registration query failed:", err.Error())
+                }</span>
+                <span class="cov8" title="1">return</span>
+        }
+
+        <span class="cov8" title="1">resp.WriteHeader(http.StatusCreated)</span>
+}
+
+//Login вход в систему, проверка правильности login/passwd по базе зарегистрированных
+//        пользователей. Метод POST. Параметры login, passwd — обязательны
+//Результат: новая сессия пользователя, установлен куки {"session_id": &lt;xxx&gt;}
+//Ошибка: статус "NotFound" если логин/пароль не совпадают с зарегистрированными
+//        статус "MethodNotAllowed" если метод не равен POST
+//        статус "BadRequest" если отсутствуют обязательные параметры
+//        статус "InternalServerError" в остальных случаях
+func (usr *Users) Login(resp http.ResponseWriter, req *http.Request) <span class="cov8" title="1">{
+        var (
+                qr       *sql.Row
+                err      error
+                sqlParam []interface{}
+                frmVal   []string
+                isSet    bool
+                userID   int
+        )
+
+        resp.Header().Set("Content-Type", "text/plain")
+        if req.Method != http.MethodPost </span><span class="cov8" title="1">{
+                http.Error(resp, "bad method", http.StatusMethodNotAllowed)
+                return
+        }</span>
+
+        <span class="cov8" title="1">err = req.ParseForm()
+        if err != nil </span><span class="cov8" title="1">{
+                http.Error(resp, "wrong form data", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">frmVal, isSet = req.Form["login"]
+        if !isSet </span><span class="cov8" title="1">{
+                http.Error(resp, "login required", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">sqlParam = append(sqlParam, frmVal[0])
+
+        frmVal, isSet = req.Form["passwd"]
+        if !isSet </span><span class="cov8" title="1">{
+                http.Error(resp, "password required", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">sqlParam = append(sqlParam, frmVal[0])
+
+        qr = usr.DB.QueryRow(`SELECT id_user 
+                FROM users 
+                WHERE login = $1 and password = md5($2)`, sqlParam...)
+        err = qr.Scan(&amp;userID)
+        if err != nil </span><span class="cov8" title="1">{
+                if err == sql.ErrNoRows </span><span class="cov8" title="1">{
+                        http.Error(resp, "wrong login or password", http.StatusNotFound)
+                }</span> else<span class="cov0" title="0"> {
+                        http.Error(resp, "internal error", http.StatusInternalServerError)
+                        log.Println("Users.Login query failed:", err.Error())
+                }</span>
+                <span class="cov8" title="1">return</span>
+        }
+
+        <span class="cov8" title="1">sessID, err := newSession(usr.DB, userID)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                log.Println("Users.Login make session failed:", err.Error())
+                return
+        }</span>
+
+        <span class="cov8" title="1">sessCook := &amp;http.Cookie{Name: "session_id", Value: sessID}
+        http.SetCookie(resp, sessCook)
+        resp.WriteHeader(http.StatusOK)</span>
+}
+
+//Logout закрывает сессию пользователя, удаляет соотв. запись из sessions
+//Результат: статус "Ок", возвращает куки "session_id" с истекшей датой
+//        (хак для удаления куки из браузера пользователя)
+//Ошибка: -
+func (usr *Users) Logout(resp http.ResponseWriter, req *http.Request) <span class="cov8" title="1">{
+        var (
+                err      error
+                sessCook *http.Cookie
+        )
+
+        usr.userID, err = checkSession(usr.DB, req)
+        if err == http.ErrNoCookie </span><span class="cov8" title="1">{
+                //        сессии и так нет, все хорошо
+                resp.WriteHeader(http.StatusOK)
+                return
+        }</span>
+        <span class="cov8" title="1">sessCook = &amp;http.Cookie{Name: "session_id", Value: "", Expires: time.Now().Add(-10 * time.Minute)}
+        http.SetCookie(resp, sessCook)
+
+        if err != nil </span><span class="cov0" title="0">{ //        сессия была, но userID прочитать не удалось?
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                return
+        }</span>
+
+        //        есть сессия, есть userID: правим в базе
+        <span class="cov8" title="1">_, err = usr.DB.Exec("DELETE FROM sessions WHERE id_user = $1", usr.userID)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                return
+        }</span>
+        <span class="cov8" title="1">resp.WriteHeader(http.StatusOK)</span>
+}
+
+//List список зарегистрированных в системе пользователей. Метод GET,
+//        доступен для авторизованных пользователей
+//Параметры: page_no — номер страницы, on_page — кол-во записей на странице
+//        необязательные, по умолчанию 1 и 10 соответственно
+//Результат: статус ОК, json список пользователей
+//Ошибка: статус MethodNotAllowed если метод не равен GET
+//        статус Unauthorized если пользователь не авторизован
+//        статус BadRequest, InternalServerError при прочих ошибках
+func (usr *Users) List(resp http.ResponseWriter, req *http.Request) <span class="cov8" title="1">{
+        var (
+                pg, ln int // номер страницы и кол-во строк ("длина" страницы)
+                qr     *sql.Rows
+                err    error
+                u      *tUser
+                uLst   tUsrList
+                jsRes  []byte
+        )
+
+        if req.Method != http.MethodGet </span><span class="cov8" title="1">{
+                http.Error(resp, "bad method", http.StatusMethodNotAllowed)
+                return
+        }</span>
+
+        <span class="cov8" title="1">usr.userID, err = checkSession(usr.DB, req)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "access denied", http.StatusUnauthorized)
+                return
+        }</span>
+
+        <span class="cov8" title="1">err = req.ParseForm()
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "wrong form data", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">pg, ln = getPageno(req)
+
+        qr, err = usr.DB.Query(`SELECT id_user, login, name 
+                FROM users ORDER BY id_user
+                OFFSET $1 LIMIT $2`, pg*ln, ln)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                if pgErr, ok := err.(*pq.Error); ok </span><span class="cov0" title="0">{
+                        log.Println("Users.List query failed:", pgErr.Message, pgErr.Detail)
+                }</span> else<span class="cov0" title="0"> {
+                        log.Println("Users.List query failed:", err.Error())
+                }</span>
+                <span class="cov0" title="0">return</span>
+        }
+        <span class="cov8" title="1">defer qr.Close()
+
+        uLst = tUsrList{}
+        //        sql.Rows в случае пустого списка не генерит ошибку ErrNoRows, проверяем сами
+        if qr.Next() </span><span class="cov8" title="1">{
+                for </span><span class="cov8" title="1">{
+                        u = &amp;tUser{}
+                        err = qr.Scan(&amp;u.UserID, &amp;u.Login, &amp;u.Name)
+                        if err != nil </span><span class="cov0" title="0">{
+                                log.Println("Users.List query iteration error:", err.Error())
+                                continue</span>
+                        }
+                        <span class="cov8" title="1">uLst.List = append(uLst.List, u)
+                        if !qr.Next() </span><span class="cov8" title="1">{
+                                break</span>
+                        }
+                }
+        } else<span class="cov8" title="1"> {
+                http.Error(resp, "", http.StatusNotFound)
+                return
+        }</span>
+        <span class="cov8" title="1">if qr.Err() != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                log.Println("Users.List query iteration error:", err.Error())
+                return
+        }</span>
+
+        <span class="cov8" title="1">jsRes, err = json.Marshal(uLst)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                log.Println("Users.List result marshaling error:", err.Error())
+                return
+        }</span>
+
+        <span class="cov8" title="1">resp.WriteHeader(http.StatusOK)
+        resp.Write(jsRes)</span>
+}
+
+//Share список пользователей, имеющих "расшаренные" треки с количеством таких треков
+//        Метод GET, доступен только для авторизованных пользователей
+//Параметры: page_no — номер страницы, on_page — кол-во записей на странице
+//        необязательные, по умолчанию 1 и 10 соответственно
+//Результат: статус ОК, json список пользователей
+//Ошибка: статус MethodNotAllowed если метод не равен GET
+//        статус Unauthorized если пользователь не авторизован
+//        статус BadRequest, InternalServerError при прочих ошибках
+func (usr *Users) Share(resp http.ResponseWriter, req *http.Request) <span class="cov8" title="1">{
+        var (
+                err    error
+                pg, ln int
+                qr     *sql.Row
+                qs     *sql.Rows
+                u      *tUser
+                uLst   tUsrList
+        )
+        if req.Method != http.MethodGet </span><span class="cov8" title="1">{
+                http.Error(resp, "bad method", http.StatusMethodNotAllowed)
+                return
+        }</span>
+
+        <span class="cov8" title="1">usr.userID, err = checkSession(usr.DB, req)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "access denied", http.StatusUnauthorized)
+                return
+        }</span>
+
+        <span class="cov8" title="1">err = req.ParseForm()
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "wrong form data", http.StatusBadRequest)
+                return
+        }</span>
+        <span class="cov8" title="1">pg, ln = getPageno(req)
+
+        uLst = tUsrList{}
+        //        список и общее количество расшаривших пользователей можно бы подсчитать
+        //        в одном запросе (group by rollup…), но offset…limit отрезает итоговую
+        //        строку из результата. Никак ее выделить отдельно не получилось — поэтому
+        //        получаем данные в два запроса:
+        //        (т.к.: cannot insert multiple commands into a prepared statement)
+        qr = usr.DB.QueryRow(`-- общее количество пользователей, расшаривших треки
+                SELECT count(distinct id_owner)
+                FROM audio
+                WHERE id_audio in (SELECT distinct id_audio FROM share)`)
+
+        err = qr.Scan(&amp;uLst.Count)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                if pgErr, ok := err.(*pq.Error); ok </span><span class="cov0" title="0">{
+                        log.Println("Users.Share scan count failed:", pgErr.Message, pgErr.Detail)
+                }</span> else<span class="cov0" title="0"> {
+                        log.Println("Users.Share scan count failed:", err.Error())
+                }</span>
+                <span class="cov0" title="0">return</span>
+        }
+
+        <span class="cov8" title="1">qs, err = usr.DB.Query(`-- список пользователей
+                SELECT a.id_owner, coalesce(nullif(u.name,''),u.login) as name, count(id_audio)
+                FROM audio a
+                INNER JOIN users u on (a.id_owner  = u.id_user)
+                WHERE exists(SELECT id_audio from share s where s.id_audio = a.id_audio)
+                GROUP BY id_owner, coalesce(nullif(u.name,''),u.login)
+                ORDER BY id_owner
+                OFFSET $1 LIMIT $2`, pg*ln, ln)
+
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                if pgErr, ok := err.(*pq.Error); ok </span><span class="cov0" title="0">{
+                        log.Println("Users.Share query list failed:", pgErr.Message, pgErr.Detail)
+                }</span> else<span class="cov0" title="0"> {
+                        log.Println("Users.Share query list failed:", err.Error())
+                }</span>
+                <span class="cov0" title="0">return</span>
+        }
+        <span class="cov8" title="1">defer qs.Close()
+
+        //        sql.Rows в случае пустого списка не генерит ошибку ErrNoRows, проверяем сами
+        if !qs.Next() </span><span class="cov8" title="1">{
+                http.Error(resp, "", http.StatusNotFound)
+                return
+        }</span>
+        <span class="cov8" title="1">for </span><span class="cov8" title="1">{
+                u = &amp;tUser{}
+                err = qs.Scan(&amp;u.UserID, &amp;u.Name, &amp;u.Shared)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Println("Users.Share scan list error:", err.Error())
+                        continue</span>
+                }
+                <span class="cov8" title="1">uLst.List = append(uLst.List, u)
+                if !qs.Next() </span><span class="cov8" title="1">{
+                        break</span>
+                }
+        }
+        <span class="cov8" title="1">if qs.Err() != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                log.Println("Users.Share query iteration error:", err.Error())
+                return
+        }</span>
+
+        <span class="cov8" title="1">jsRes, err := json.Marshal(uLst)
+        if err != nil </span><span class="cov0" title="0">{
+                http.Error(resp, "internal error", http.StatusInternalServerError)
+                log.Println("Users.Share result marshaling error:", err.Error())
+                return
+        }</span>
+
+        <span class="cov8" title="1">resp.WriteHeader(http.StatusOK)
+        resp.Write(jsRes)</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
